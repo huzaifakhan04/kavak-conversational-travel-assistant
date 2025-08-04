@@ -657,9 +657,9 @@ async def run_search_and_answer(
         logger.error(f"Error in run_search_and_answer: {e}", exc_info=True)
         return {"error": str(e)}
     
-#   Generating a PNG representation of the graph.
+#   Generating a PNG representation of the graph – uncomment to use.
     
-png_data=app.get_graph().draw_mermaid_png()
-output_path="graph.png"
-with open(output_path, "wb") as f:
-    f.write(png_data)
+# png_data=app.get_graph().draw_mermaid_png()
+# output_path="graph.png"
+# with open(output_path, "wb") as f:
+#     f.write(png_data)
