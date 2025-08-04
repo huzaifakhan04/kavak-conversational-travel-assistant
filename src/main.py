@@ -2,7 +2,10 @@ import os
 import time
 import logging
 import nest_asyncio
-from fastapi import FastAPI, HTTPException
+from fastapi import (
+    FastAPI,
+    HTTPException
+)
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from src.models import (
