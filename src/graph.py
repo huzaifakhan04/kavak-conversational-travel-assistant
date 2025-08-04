@@ -7,13 +7,15 @@ from typing import (
     List,
     Dict,
     Any,
-    Optional
+    Optional,
+    Literal
 )
 from langgraph.graph import (
     StateGraph,
     START,
     END
 )
+from langgraph.types import Command
 from langchain_core.messages import (
     HumanMessage,
     SystemMessage
@@ -90,11 +92,63 @@ class GraphState(TypedDict):
 
     query: str
     collection_name: str
+    query_type: str #   "flight_only", "info_only", "both"
     filters: Dict[str, Any] #   Hard filters to apply.
     filter_options: Dict[str, Any]  #   Available filter options.
     filtered_docs: List[Document]
+    info_docs: List[Document]   #   Documents from simple retrieval.
     reranked_docs: List[Document]
     answer: str
+
+#   Classifying the query to determine if it's flight-related, info-related, or both.
+
+async def classify_query(state: GraphState) -> Command[Literal["generate_filters", "simple_retrieval"]]:
+    logger.info("Starting query classification")
+    try:
+        query=state["query"]
+        
+        classification_prompt=ChatPromptTemplate.from_messages([
+            ("system", """You are a query classifier for a flight booking and travel information system. 
+            Analyze the user's query and classify it into one of three categories:
+
+            1. "flight_only" - Query is specifically about flight booking, searching, or flight details (e.g., "flights from NYC to London", "business class flights under $2000", "Emirates flights to Dubai")
+
+            2. "info_only" - Query is about travel information, policies, rules, or general travel advice (e.g., "visa requirements for India", "refund policies", "baggage rules", "travel tips")
+
+            3. "both" - Query contains both flight-specific requests and general information requests (e.g., "flights to Japan and visa requirements", "Emirates flights to Dubai and their baggage policy")
+
+            Return only the classification string: "flight_only", "info_only", or "both"
+
+            User Query: {query}"""),
+            ("human", "Classify this query.")
+        ])
+        llm_instance=await get_gemini_llm()
+        if llm_instance:
+            try:
+                response=await asyncio.to_thread(
+                    lambda: llm_instance.invoke([
+                        SystemMessage(content=classification_prompt.format(query=query)),
+                        HumanMessage(content="Classify this query.")
+                    ])
+                )
+                query_type=response.content.strip().lower()
+                if query_type not in ["flight_only", "info_only", "both"]:
+                    logger.warning(f"Invalid classification '{query_type}', defaulting to 'both'")
+                    query_type="both"
+                logger.info(f"Query classified as: {query_type}")
+                if query_type in ["flight_only", "both"]:
+                    return Command(goto="generate_filters", update={"query_type": query_type})
+                else:
+                    return Command(goto="simple_retrieval", update={"query_type": query_type})
+            except Exception as e:
+                logger.error(f"Error classifying query with LLM: {e}")
+                return Command(goto="generate_filters", update={"query_type": "both"})
+        else:
+            logger.warning("LLM not available for query classification, defaulting to 'both'")
+            return Command(goto="generate_filters", update={"query_type": "both"})
+    except Exception as e:
+        logger.error(f"Error in classify_query: {e}", exc_info=True)
+        return Command(goto="generate_filters", update={"query_type": "both"})
 
 #   Generate dynamic filters using LLM based on the query and available filter options.
 
@@ -106,31 +160,42 @@ async def generate_filters(state: GraphState) -> Dict[str, Any]:
         filter_options=state.get("filter_options", get_filter_options())
         logger.info(f"Generating filters for query: {query}")
         filter_prompt=ChatPromptTemplate.from_messages([
-            ("system", """You are a filter generation assistant. Based on the user's query and available filter options, generate appropriate filters to narrow down the search results.
+            ("system", """You are a filter generation assistant for a flight booking system. Based on the user's query and available filter options, generate appropriate filters to narrow down the search results.
 
             Available filter options:
             {filter_options}
 
             Instructions:
+            
             1. Analyze the user's query to identify relevant filters
-            2. Select specific values from the available options that match the query intent
-            3. Only include filters that are explicitly mentioned or strongly implied in the query
-            4. Return a JSON object with the selected filters
-            5. Use null for filters that are not applicable
+            2. For layover queries (e.g., "flights to X with layover in Y"), focus on the destination country (X) and consider the layover country (Y) as additional context
+            3. Select specific values from the available options that match the query intent
+            4. Only include filters that are explicitly mentioned or strongly implied in the query
+            5. Return a JSON object with the selected filters
+            6. Use null for filters that are not applicable
+
+            IMPORTANT: For queries about flights to a specific country, always set the "to_country" filter to that country.
 
             Example output format:
+            
             {{
-                "airline": "Emirates",
-                "from_country": "India", 
-                "to_country": "UAE",
-                "travel_class": "business",
-                "max_price": 5000,
-                "refundable": true,
+                "airline": null,
+                "from_country": null, 
+                "to_country": "Turkey",
+                "travel_class": null,
+                "max_price": null,
+                "refundable": null,
                 "baggage_included": null,
                 "wifi_available": null,
                 "meal_service": null,
                 "aircraft_type": null
             }}
+             
+            Examples:
+            
+            - Query: "flights to Turkey with layover in London" → {{"to_country": "Turkey"}}
+            - Query: "Emirates flights to Dubai" → {{"airline": "Emirates", "to_country": "UAE"}}
+            - Query: "business class flights under $2000" → {{"travel_class": "business", "max_price": 2000}}
 
             User Query: {query}"""),
             ("human", "Generate filters for this query.")
@@ -149,20 +214,20 @@ async def generate_filters(state: GraphState) -> Dict[str, Any]:
                 
                 cleaned_filters={k: v for k, v in filters.items() if v is not None}
                 logger.info(f"Generated filters: {cleaned_filters}")
-                return {"filters": cleaned_filters}
+                return Command(goto="apply_hard_filters", update={"filters": cleaned_filters})
             except Exception as e:
                 logger.error(f"Error generating filters with LLM: {e}")
-                return {"filters": {}}
+                return Command(goto="apply_hard_filters", update={"filters": {}})
         else:
             logger.warning("LLM not available for filter generation")
-            return {"filters": {}}
+            return Command(goto="apply_hard_filters", update={"filters": {}})
     except Exception as e:
         logger.error(f"Error in generate_filters: {e}", exc_info=True)
-        return {"filters": {}}
+        return Command(goto="apply_hard_filters", update={"filters": {}})
 
 #   Apply hard filters to the collection based on metadata and query.
 
-async def apply_hard_filters(state: GraphState) -> Dict[str, Any]:
+async def apply_hard_filters(state: GraphState) -> Command[Literal["rerank_documents"]]:
     logger.info("Starting hard filter application")
     try:
         await initialize_components()
@@ -293,53 +358,59 @@ async def apply_hard_filters(state: GraphState) -> Dict[str, Any]:
                 retrieval_mode=RetrievalMode.DENSE,
             )
         )
+
+        #   First search with filters applied.
+
         retriever=original_store.as_retriever(
-            search_kwargs={"k": 50, "filter": filter_obj}
+            search_kwargs={"k": 20, "filter": filter_obj}
         )
         logger.info(f"Searching with query: '{query}' and filter: {filter_obj}")
         filtered_docs=await retriever.ainvoke(query)
         if not filtered_docs:
             logger.warning(f"No documents found with filters: {filters}, trying without filters")
-            retriever=original_store.as_retriever(search_kwargs={"k": 50})
+            retriever=original_store.as_retriever(search_kwargs={"k": 20})
             filtered_docs=await retriever.ainvoke(query)
             logger.info(f"Retrieved {len(filtered_docs)} documents without filters")
         else:
             logger.info(f"Retrieved {len(filtered_docs)} documents with filters")
         
         logger.info(f"Total documents retrieved: {len(filtered_docs)}")
+
+        #   Logging the filtered documents for debugging.
+
         if filtered_docs:
-            in_memory_store=await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: QdrantVectorStore.from_documents(
-                    documents=filtered_docs,
-                    embedding=embeddings,
-                    location=":memory:",
-                    collection_name="filtered_collection",
-                    retrieval_mode=RetrievalMode.DENSE,
-                )
-            )
-            logger.info("Created in-memory vector store with filtered documents")
-            in_memory_retriever=in_memory_store.as_retriever(search_kwargs={"k": 10})
-            final_docs=await in_memory_retriever.ainvoke(query)
-            logger.info(f"Retrieved {len(final_docs)} documents from in-memory store with top-k = 5 - using filtered docs for better precision")
-        else:
-            in_memory_store=original_store
-            logger.warning("No documents to create in-memory store, using original store")
-            final_docs=[]
-        return {"filtered_docs": final_docs}
+            logger.info("First 3 documents retrieved:")
+            for i, doc in enumerate(filtered_docs[:3]):
+                logger.info(f"  Doc {i+1}: {doc.page_content[:100]}...")
+                if hasattr(doc, 'metadata') and doc.metadata:
+                    logger.info(f"    Metadata: {doc.metadata}")
+        return Command(goto="rerank_documents", update={"filtered_docs": filtered_docs})
     except Exception as e:
         logger.error(f"Error in apply_hard_filters: {e}", exc_info=True)
-        return {"filtered_docs": []}
+        return Command(goto="rerank_documents", update={"filtered_docs": []})
+    
+#   Rerank the filtered documents using LLM reranker.
 
-async def rerank_documents(state: GraphState) -> Dict[str, Any]:
+async def rerank_documents(state: GraphState) -> Command[Literal["merge_documents"]]:
     logger.info("Starting document reranking")
     try:
         filtered_docs=state["filtered_docs"]
         query=state["query"]
         if not filtered_docs:
-            logger.warning("No documents to rerank")
-            return {"reranked_docs": []}
-        logger.info(f"Reranking {len(filtered_docs)} documents")
+            logger.warning("No documents to rerank.")
+            return Command(goto="merge_documents", update={"reranked_docs": []})
+        logger.info(f"Reranking {len(filtered_docs)} flight documents")
+        
+        #   Logging the original document order for debugging.
+
+        logger.info("Original document order:")
+
+        #   Logging the first 5 documents for context.
+
+        for i, doc in enumerate(filtered_docs[:5]):
+            logger.info(f"  Original {i+1}: {doc.page_content[:100]}...")
+            if hasattr(doc, 'metadata') and doc.metadata:
+                logger.info(f"    Metadata: {doc.metadata}")
         
         #   Using the LLM reranker – run in separate thread to avoid blocking.
 
@@ -355,15 +426,26 @@ async def rerank_documents(state: GraphState) -> Dict[str, Any]:
             documents=filtered_docs,
             query=query
         )
-        logger.info(f"Reranked to {len(reranked_docs)} documents")
-        return {"reranked_docs": reranked_docs}
+
+        #   Logging the reranked documents for debugging.
+
+        logger.info("Reranked document order:")
+
+        #   Logging the first 5 reranked documents for context.
+
+        for i, doc in enumerate(reranked_docs[:5]):
+            logger.info(f"  Reranked {i+1}: {doc.page_content[:100]}...")
+            if hasattr(doc, "metadata") and doc.metadata:
+                logger.info(f"    Metadata: {doc.metadata}")
+        logger.info(f"Reranked flight documents to {len(reranked_docs)} documents")
+        return Command(goto="merge_documents", update={"reranked_docs": reranked_docs})
     except Exception as e:
         logger.error(f"Error in rerank_documents: {e}", exc_info=True)
-        return {"reranked_docs": []}
+        return Command(goto="merge_documents", update={"reranked_docs": []})
     
 #   Generate the final answer based on the reranked documents and query.
 
-async def generate_answer(state: GraphState) -> Dict[str, Any]:
+async def generate_answer(state: GraphState) -> Command[Literal[END]]:
     logger.info("Starting answer generation")
     try:
         query=state["query"]
@@ -395,27 +477,105 @@ async def generate_answer(state: GraphState) -> Dict[str, Any]:
         else:
             answer=f"Based on the {len(reranked_docs)} relevant documents found, here's what I can tell you about '{query}': [LLM not available]"
         logger.info("Answer generation complete")
-        return {"answer": answer}
+        return Command(goto=END, update={"answer": answer})
     except Exception as e:
         logger.error(f"Error in generate_answer: {e}", exc_info=True)
-        return {"answer": "Sorry, I encountered an error while generating the answer."}
+        return Command(goto=END, update={"answer": "Sorry, I encountered an error while generating the answer."})
+    
+#   Perform simple retrieval for info-only queries without hard filters.
+    
+async def simple_retrieval(state: GraphState) -> Command[Literal["merge_documents"]]:
+    logger.info("Starting simple retrieval for info queries")
+    try:
+        await initialize_components()
+        collection_name=state["collection_name"]
+        query=state["query"]
+        logger.info(f"Performing simple retrieval for query: '{query}'")
+        original_store=await asyncio.to_thread(
+            lambda: QdrantVectorStore(
+                client=client,
+                collection_name=collection_name,
+                embedding=embeddings,
+                retrieval_mode=RetrievalMode.DENSE,
+            )
+        )
+        retriever=original_store.as_retriever(search_kwargs={"k": 10})
+        info_docs=await retriever.ainvoke(query)
+        logger.info(f"Retrieved {len(info_docs)} documents from simple retrieval")
+        return Command(goto="merge_documents", update={"info_docs": info_docs})
+    except Exception as e:
+        logger.error(f"Error in simple_retrieval: {e}", exc_info=True)
+        return Command(goto="merge_documents", update={"info_docs": []})
+
+#   Merge documents from both flight and info retrieval paths, reranking if needed.
+
+async def merge_documents(state: GraphState) -> Command[Literal["generate_answer"]]:
+    logger.info("Starting document merging")
+    try:
+        filtered_docs=state.get("filtered_docs", [])
+        info_docs=state.get("info_docs", [])
+        query_type=state.get("query_type", "both")
+        query=state["query"]
+        if query_type=="flight_only":
+            merged_docs=filtered_docs
+            logger.info(f"Flight-only query: using {len(merged_docs)} flight documents")
+        elif query_type=="info_only":
+            if info_docs:
+                logger.info(f"Reranking {len(info_docs)} info documents")
+                compressor=await asyncio.to_thread(
+                    lambda: RankLLMRerank(
+                        model="gpt", 
+                        gpt_model="gpt-4o-mini", 
+                        top_n=min(10, len(info_docs))
+                    )
+                )
+                merged_docs=await compressor.acompress_documents(
+                    documents=info_docs,
+                    query=query
+                )
+                logger.info(f"Reranked info documents to {len(merged_docs)} documents")
+            else:
+                merged_docs=[]
+                logger.info("No info documents to rerank")
+        else:
+            all_docs=filtered_docs+info_docs
+            if all_docs:
+                logger.info(f"Reranking combined {len(all_docs)} documents (flight and information)")
+                compressor=await asyncio.to_thread(
+                    lambda: RankLLMRerank(
+                        model="gpt", 
+                        gpt_model="gpt-4o-mini", 
+                        top_n=min(15, len(all_docs))
+                    )
+                )
+                merged_docs=await compressor.acompress_documents(
+                    documents=all_docs,
+                    query=query
+                )
+                logger.info(f"Reranked combined documents to {len(merged_docs)} documents")
+            else:
+                merged_docs=[]
+                logger.info("No documents to rerank")
+        return Command(goto="generate_answer", update={"reranked_docs": merged_docs})
+    except Exception as e:
+        logger.error(f"Error in merge_documents: {e}", exc_info=True)
+        return Command(goto="generate_answer", update={"reranked_docs": []})
 
 workflow=StateGraph(GraphState) #   Building the graph workflow.
 
 #   Adding nodes to the workflow.
 
+workflow.add_node("classify_query", classify_query)
 workflow.add_node("generate_filters", generate_filters)
 workflow.add_node("apply_hard_filters", apply_hard_filters)
 workflow.add_node("rerank_documents", rerank_documents)
 workflow.add_node("generate_answer", generate_answer)
+workflow.add_node("simple_retrieval", simple_retrieval)
+workflow.add_node("merge_documents", merge_documents)
 
 #   Defining the workflow structure.
 
-workflow.add_edge(START, "generate_filters")
-workflow.add_edge("generate_filters", "apply_hard_filters")
-workflow.add_edge("apply_hard_filters", "rerank_documents")
-workflow.add_edge("rerank_documents", "generate_answer")
-workflow.add_edge("generate_answer", END)
+workflow.add_edge(START, "classify_query")
 
 app=workflow.compile()  #   Compiling the workflow.
 
@@ -475,9 +635,11 @@ async def run_search_and_answer(
     initial_state={
         "query": query,
         "collection_name": collection_name,
+        "query_type": "both",   #   Default to "both" until classified.
         "filters": {},
         "filter_options": get_filter_options(),
         "filtered_docs": [],
+        "info_docs": [],
         "reranked_docs": [],
         "answer": ""
     }

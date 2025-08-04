@@ -91,6 +91,7 @@ async def create_filter_indexes(client: QdrantClient, collection_name: str) -> N
         #   Defining the fields to index for filtering.
 
         filter_fields=[
+            ("document_type", "keyword"),
             ("airline", "keyword"),
             ("alliance", "keyword"),
             ("from_country", "keyword"),
