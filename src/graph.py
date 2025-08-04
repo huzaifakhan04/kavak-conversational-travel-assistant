@@ -47,23 +47,40 @@ embeddings=None
 llm=None
 client=None
 
+#   Initialize the embedding model and Qdrant client asynchronously.
+
 async def initialize_components():
 
-    '''
-    
-        TODO: Initialize embeddings and client asynchronously.
-        
-    '''
+    global embeddings, client
+    if embeddings is None:
+        embeddings=await asyncio.to_thread(get_embedding_model, "text-embedding-004")
+    if client is None:
+        client=await asyncio.to_thread(get_qdrant_client)
 
     pass
 
+#   Initialize the LLM instance for answer generation.
+
 async def get_gemini_llm():
-    
-    '''
-
-        TODO: Get Gemini LLM instance for answer generation.
-
-    '''
+    global llm
+    if llm is None:
+        try:
+            google_api_key=os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise ValueError("GOOGLE_API_KEY not found in environment variables")
+            
+            llm=await asyncio.to_thread(
+                lambda: ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
+                    google_api_key=google_api_key,
+                    temperature=0.1
+                )
+            )
+            return llm
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini LLM: {str(e)}")
+            return None
+    return llm
 
     pass
 
@@ -79,37 +96,266 @@ class GraphState(TypedDict):
     reranked_docs: List[Document]
     answer: str
 
+#   Generate dynamic filters using LLM based on the query and available filter options.
 
 async def generate_filters(state: GraphState) -> Dict[str, Any]:
-    
-    '''
-    
-        TODO: Generate filters dynamically using LLM based on the query and available filter options.
-    
-    '''
-    pass
+    logger.info("Starting dynamic filter generation")
+    try:
+        await initialize_components()
+        query=state["query"]
+        filter_options=state.get("filter_options", get_filter_options())
+        logger.info(f"Generating filters for query: {query}")
+        filter_prompt=ChatPromptTemplate.from_messages([
+            ("system", """You are a filter generation assistant. Based on the user's query and available filter options, generate appropriate filters to narrow down the search results.
 
+            Available filter options:
+            {filter_options}
+
+            Instructions:
+            1. Analyze the user's query to identify relevant filters
+            2. Select specific values from the available options that match the query intent
+            3. Only include filters that are explicitly mentioned or strongly implied in the query
+            4. Return a JSON object with the selected filters
+            5. Use null for filters that are not applicable
+
+            Example output format:
+            {{
+                "airline": "Emirates",
+                "from_country": "India", 
+                "to_country": "UAE",
+                "travel_class": "business",
+                "max_price": 5000,
+                "refundable": true,
+                "baggage_included": null,
+                "wifi_available": null,
+                "meal_service": null,
+                "aircraft_type": null
+            }}
+
+            User Query: {query}"""),
+            ("human", "Generate filters for this query.")
+        ])
+        json_parser=JsonOutputParser()
+        llm_instance=await get_gemini_llm()
+        if llm_instance:
+            try:
+                chain=filter_prompt | llm_instance | json_parser
+                filters=await asyncio.to_thread(
+                    lambda: chain.invoke({
+                        "query": query,
+                        "filter_options": json.dumps(filter_options, indent=2)
+                    })
+                )
+                
+                cleaned_filters={k: v for k, v in filters.items() if v is not None}
+                logger.info(f"Generated filters: {cleaned_filters}")
+                return {"filters": cleaned_filters}
+            except Exception as e:
+                logger.error(f"Error generating filters with LLM: {e}")
+                return {"filters": {}}
+        else:
+            logger.warning("LLM not available for filter generation")
+            return {"filters": {}}
+    except Exception as e:
+        logger.error(f"Error in generate_filters: {e}", exc_info=True)
+        return {"filters": {}}
+
+#   Apply hard filters to the collection based on metadata and query.
 
 async def apply_hard_filters(state: GraphState) -> Dict[str, Any]:
-    
-    '''
-
-        TODO: Apply hard filters to the collection based on metadata.
-
-    '''
-
-    pass
-
+    logger.info("Starting hard filter application")
+    try:
+        await initialize_components()
+        collection_name=state["collection_name"]
+        filters=state["filters"]
+        query=state["query"]
+        logger.info(f"Applying filters: {filters} to collection: {collection_name}")
+        try:
+            await ensure_filter_indexes(client, collection_name)
+            logger.info("Ensured filter indexes exist")
+        except Exception as e:
+            logger.warning(f"Could not ensure filter indexes: {e}")
+        try:
+            sample_points, _=await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: client.scroll(
+                    collection_name=collection_name,
+                    limit=1,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+            )
+            if sample_points:
+                sample_metadata=sample_points[0].payload
+                logger.info(f"Sample document metadata keys: {list(sample_metadata.keys())}")
+                logger.info(f"Sample document metadata: {sample_metadata}")
+        except Exception as e:
+            logger.warning(f"Could not get sample document: {e}")
+        filter_conditions=[]
+        if "airline" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="airline",
+                    match=MatchValue(value=filters["airline"])
+                )
+            )
+        if "alliance" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="alliance",
+                    match=MatchValue(value=filters["alliance"])
+                )
+            )
+        if "from_country" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="from_country",
+                    match=MatchValue(value=filters["from_country"])
+                )
+            )
+        if "to_country" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="to_country",
+                    match=MatchValue(value=filters["to_country"])
+                )
+            )
+        if "travel_class" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="travel_class",
+                    match=MatchValue(value=filters["travel_class"])
+                )
+            )
+        if "max_price" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="price_usd",
+                    range=Range(lte=filters["max_price"])
+                )
+            )
+        if "min_price" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="price_usd",
+                    range=Range(gte=filters["min_price"])
+                )
+            )
+        if "refundable" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="refundable",
+                    match=MatchValue(value=filters["refundable"])
+                )
+            )
+        if "baggage_included" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="baggage_included",
+                    match=MatchValue(value=filters["baggage_included"])
+                )
+            )
+        if "wifi_available" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="wifi_available",
+                    match=MatchValue(value=filters["wifi_available"])
+                )
+            )
+        if "meal_service" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="meal_service",
+                    match=MatchValue(value=filters["meal_service"])
+                )
+            )
+        if "aircraft_type" in filters:
+            filter_conditions.append(
+                FieldCondition(
+                    key="aircraft_type",
+                    match=MatchValue(value=filters["aircraft_type"])
+                )
+            )
+        if filter_conditions:
+            if len(filter_conditions) > 1:
+                filter_obj=Filter(should=filter_conditions)
+            else:
+                filter_obj=Filter(must=filter_conditions)
+            logger.info(f"Created filter with {len(filter_conditions)} conditions: {filter_conditions}")
+        else:
+            filter_obj=None
+            logger.info("No filter conditions created, will search without filters")
+        original_store=await asyncio.to_thread(
+            lambda: QdrantVectorStore(
+                client=client,
+                collection_name=collection_name,
+                embedding=embeddings,
+                retrieval_mode=RetrievalMode.DENSE,
+            )
+        )
+        retriever=original_store.as_retriever(
+            search_kwargs={"k": 50, "filter": filter_obj}
+        )
+        logger.info(f"Searching with query: '{query}' and filter: {filter_obj}")
+        filtered_docs=await retriever.ainvoke(query)
+        if not filtered_docs:
+            logger.warning(f"No documents found with filters: {filters}, trying without filters")
+            retriever=original_store.as_retriever(search_kwargs={"k": 50})
+            filtered_docs=await retriever.ainvoke(query)
+            logger.info(f"Retrieved {len(filtered_docs)} documents without filters")
+        else:
+            logger.info(f"Retrieved {len(filtered_docs)} documents with filters")
+        
+        logger.info(f"Total documents retrieved: {len(filtered_docs)}")
+        if filtered_docs:
+            in_memory_store=await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: QdrantVectorStore.from_documents(
+                    documents=filtered_docs,
+                    embedding=embeddings,
+                    location=":memory:",
+                    collection_name="filtered_collection",
+                    retrieval_mode=RetrievalMode.DENSE,
+                )
+            )
+            logger.info("Created in-memory vector store with filtered documents")
+        else:
+            in_memory_store=original_store
+            logger.warning("No documents to create in-memory store, using original store")
+        return {"filtered_docs": filtered_docs}
+    except Exception as e:
+        logger.error(f"Error in apply_hard_filters: {e}", exc_info=True)
+        return {"filtered_docs": []}
 
 async def rerank_documents(state: GraphState) -> Dict[str, Any]:
-    
-    '''
-    
-        TODO: Rerank the filtered documents using LLM reranker.
-    
-    '''
-    pass
+    logger.info("Starting document reranking")
+    try:
+        filtered_docs=state["filtered_docs"]
+        query=state["query"]
+        if not filtered_docs:
+            logger.warning("No documents to rerank")
+            return {"reranked_docs": []}
+        logger.info(f"Reranking {len(filtered_docs)} documents")
+        
+        #   Using the LLM reranker – run in separate thread to avoid blocking.
 
+        compressor=await asyncio.to_thread(
+            lambda: RankLLMRerank(
+                model="gpt", 
+                gpt_model="gpt-4o-mini", 
+                top_n=min(10, len(filtered_docs))
+            )
+        )
+        
+        reranked_docs=await compressor.acompress_documents(
+            documents=filtered_docs,
+            query=query
+        )
+        logger.info(f"Reranked to {len(reranked_docs)} documents")
+        return {"reranked_docs": reranked_docs}
+    except Exception as e:
+        logger.error(f"Error in rerank_documents: {e}", exc_info=True)
+        return {"reranked_docs": []}
 
 async def generate_answer(state: GraphState) -> Dict[str, Any]:
     
@@ -119,7 +365,6 @@ async def generate_answer(state: GraphState) -> Dict[str, Any]:
     
     '''
     pass
-
 
 workflow=StateGraph(GraphState) #   Building the graph workflow.
 
@@ -165,5 +410,5 @@ async def run_search_and_answer(
         TODO: Run the complete search and answer generation workflow with dynamic filter generation.
     
     '''
-    
+
     pass 
