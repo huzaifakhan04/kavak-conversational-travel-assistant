@@ -31,11 +31,11 @@ from qdrant_client.models import (
     MatchValue,
     Range
 )
-from src.client_qdrant import (
+from client_qdrant import (
     get_qdrant_client,
     ensure_filter_indexes
 )
-from src.embeddings import get_embedding_model
+from embeddings import get_embedding_model
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate

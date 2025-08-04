@@ -19,10 +19,10 @@ logger=logging.getLogger(__name__)
 #   Configuration for Qdrant client connection.
 
 def get_qdrant_client(timeout: int=30):
-    qdrant_url=os.getenv("QDRANT_CLOUD")
+    qdrant_url=os.getenv("QDRANT_URL")
     return QdrantClient(
         url=qdrant_url,
-        api_key=os.getenv("QDRANT_CLOUD_KEY"),
+        api_key=os.getenv("QDRANT_API_KEY"),
         port=None,
         prefer_grpc=False,
         timeout=timeout

@@ -8,7 +8,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from src.models import (
+from models import (
     DataIngestionRequest,
     DataIngestionResponse,
     CreateCollectionRequest,
@@ -16,11 +16,11 @@ from src.models import (
     SearchRequest,
     SearchResponse
 )
-from src.ingestion import (
+from ingestion import (
     ingest_data_to_qdrant,
     create_collection
 )
-from src.graph import run_search_and_answer
+from graph import run_search_and_answer
 
 #   Creating a directory for logs if it doesn't exist.
 
@@ -243,6 +243,6 @@ async def search_with_langgraph(request: SearchRequest):
 
 if __name__=="__main__":
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=8001)
     except Exception as e:
         logger.exception(f"Error starting the server: {e}")

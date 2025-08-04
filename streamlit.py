@@ -78,13 +78,13 @@ st.markdown("""
 
 #   API Configuration.
 
-API_BASE_URL="http://localhost:8000"
+API_BASE_URL="http://localhost:8001"
 
 #   Function to check if the API is reachable.
 
 def check_api_connection():
     try:
-        response=requests.get(f"{API_BASE_URL}/", timeout=5)
+        response=requests.get(f'{API_BASE_URL}/', timeout=5)
         return response.status_code==200
     except:
         return False
@@ -94,7 +94,7 @@ def check_api_connection():
 def create_collection(collection_name: str) -> Dict[str, Any]:
     try:
         response=requests.post(
-            f"{API_BASE_URL}/create-collection",
+            f'{API_BASE_URL}/create-collection',
             json={"collection_name": collection_name},
             timeout=30
         )
@@ -107,7 +107,7 @@ def create_collection(collection_name: str) -> Dict[str, Any]:
 def ingest_data(filename: str, file_type: str, collection_name: str) -> Dict[str, Any]:
     try:
         response=requests.post(
-            f"{API_BASE_URL}/ingest",
+            f'{API_BASE_URL}/ingest',
             json={
                 "filename": filename,
                 "file_type": file_type,
@@ -124,7 +124,7 @@ def ingest_data(filename: str, file_type: str, collection_name: str) -> Dict[str
 def search_with_langgraph(query: str, collection_name: str) -> Dict[str, Any]:
     try:
         response=requests.post(
-            f"{API_BASE_URL}/search",
+            f'{API_BASE_URL}/search',
             json={
                 "query": query,
                 "collection_name": collection_name
@@ -172,7 +172,7 @@ def main():
     #   Checking API connection.
 
     if not check_api_connection():
-        st.error("❌ Cannot connect to KAVAK API server. Please ensure the server is running on http://localhost:8000")
+        st.error("❌ Cannot connect to KAVAK API server. Please ensure the server is running on http://localhost:8001")
         st.info("💡 Start the server with: `python src/main.py`")
         return
     
@@ -270,7 +270,7 @@ def show_vector_store():
                     st.success(f'✅ Collection "{collection_name}" created successfully!')
                     st.json(result)
                 else:
-                    st.error(f"❌ Failed to create collection: {result.get("error", "Unknown error")}")
+                    st.error(f'❌ Failed to create collection: {result.get("error", "Unknown error")}')
             else:
                 st.error("Please enter a collection name")
 
@@ -290,10 +290,10 @@ def show_data_ingestion():
     selected_file=st.selectbox(
         "Choose a file:",
         options=available_files,
-        format_func=lambda x: f"{x["name"]} ({x["type"].upper()}, {x["size"]} bytes)"
+        format_func=lambda x: f'{x["name"]} ({x["type"].upper()}, {x["size"]} bytes)'
     )
     if selected_file:
-        st.info(f"Selected: {selected_file["name"]} ({selected_file["type"]})")
+        st.info(f'Selected: {selected_file["name"]} ({selected_file["type"]})')
         
         #   Collection name input.
 
@@ -314,7 +314,7 @@ def show_data_ingestion():
                     else:
                         st.text_area("File Preview:", content)
             except Exception as e:
-                st.error(f"Error reading file: {e}")
+                st.error(f'Error reading file: {e}')
         
         #   Ingestion button.
 
@@ -327,10 +327,10 @@ def show_data_ingestion():
                         collection_name=collection_name
                     )
                 if result.get("success"):
-                    st.success(f"✅ Successfully ingested {result.get("documents_processed", 0)} documents!")
+                    st.success(f'✅ Successfully ingested {result.get("documents_processed", 0)} documents!')
                     st.json(result)
                 else:
-                    st.error(f"❌ Ingestion failed: {result.get("error", "Unknown error")}")
+                    st.error(f'❌ Ingestion failed: {result.get("error", "Unknown error")}')
             else:
                 st.error("Please enter a collection name")
 
@@ -383,7 +383,7 @@ def show_search():
                 #   Displaying the search results.
 
                 st.markdown('<div class="search-result">', unsafe_allow_html=True)
-                st.markdown(f"**🤖 Generated Answer:**")
+                st.markdown(f'**🤖 Generated Answer:**')
                 st.markdown(result.get("answer", "No answer generated"))
                 st.markdown("</div>", unsafe_allow_html=True)
                 
@@ -403,8 +403,8 @@ def show_search():
                             metrics_data={
                                 "Query Type": result.get("query_type", "unknown"),
                                 "Documents Used": result.get("documents_used", 0),
-                                "Processing Time": f"{result.get("processing_time", 0):.2f}s",
-                                "Total Time": f"{search_time:.2f}s"
+                                "Processing Time": f'{result.get("processing_time", 0):.2f}s',
+                                "Total Time": f'{search_time:.2f}s'
                             }
                             st.json(metrics_data)
                 
@@ -414,7 +414,7 @@ def show_search():
                     st.json(result)
 
             else:
-                st.error(f"❌ Search failed: {result.get("error", "Unknown error")}")
+                st.error(f'❌ Search failed: {result.get("error", "Unknown error")}')
         else:
             st.error("Please enter both a query and collection name")
 
@@ -432,7 +432,7 @@ def show_analytics():
         <div class="metric-card">
             <h4>🔧 API Status</h4>
             <p>✅ Running</p>
-            <p>Port: 8000</p>
+            <p>Port: 8001</p>
         </div>
         """, unsafe_allow_html=True)
         st.markdown("""
@@ -493,7 +493,7 @@ def show_analytics():
         "🛡️ **Robust Fallbacks**: Multiple fallback strategies ensure reliability"
     ]
     for feature in features:
-        st.markdown(f"• {feature}")
+        st.markdown(f'• {feature}')
 
 if __name__=="__main__":
     main()

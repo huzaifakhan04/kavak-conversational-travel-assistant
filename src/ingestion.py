@@ -4,13 +4,13 @@ import logging
 from typing import List
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from src.client_qdrant import (
+from client_qdrant import (
     get_qdrant_client,
     initialize_vector_store,
     create_qdrant_collection
 )
-from src.models import FileType
-from src.embeddings import get_embedding_model
+from models import FileType
+from embeddings import get_embedding_model
 
 logger=logging.getLogger(__name__)
 
