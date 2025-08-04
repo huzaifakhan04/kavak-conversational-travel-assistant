@@ -19,7 +19,6 @@ from src.ingestion import (
     create_collection
 )
 
-
 #   Creating a directory for logs if it doesn't exist.
 
 log_directory="logs"
