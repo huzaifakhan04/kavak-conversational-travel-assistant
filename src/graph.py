@@ -319,10 +319,14 @@ async def apply_hard_filters(state: GraphState) -> Dict[str, Any]:
                 )
             )
             logger.info("Created in-memory vector store with filtered documents")
+            in_memory_retriever=in_memory_store.as_retriever(search_kwargs={"k": 10})
+            final_docs=await in_memory_retriever.ainvoke(query)
+            logger.info(f"Retrieved {len(final_docs)} documents from in-memory store with top-k = 5 - using filtered docs for better precision")
         else:
             in_memory_store=original_store
             logger.warning("No documents to create in-memory store, using original store")
-        return {"filtered_docs": filtered_docs}
+            final_docs=[]
+        return {"filtered_docs": final_docs}
     except Exception as e:
         logger.error(f"Error in apply_hard_filters: {e}", exc_info=True)
         return {"filtered_docs": []}
