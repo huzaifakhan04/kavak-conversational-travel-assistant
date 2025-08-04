@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "travel_assistant": "./src/graph.py:app"
+  },
+  "env": ".env"
+}
