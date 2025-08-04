@@ -1,8 +1,5 @@
 from pydantic import BaseModel, validator
-from typing import (
-    Literal,
-    Optional
-)
+from typing import Optional
 from enum import Enum
 
 class FileType(str, Enum):

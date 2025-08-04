@@ -7,7 +7,6 @@ from typing import (
     List,
     Dict,
     Any,
-    Optional,
     Literal
 )
 from langgraph.graph import (
@@ -24,13 +23,11 @@ from langchain_qdrant import (
     QdrantVectorStore,
     RetrievalMode
 )
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.document_compressors.rankllm_rerank import RankLLMRerank
 from langchain_core.documents import Document
 from qdrant_client.models import (
     Filter,
     FieldCondition,
-    MatchAny,
     MatchValue,
     Range
 )

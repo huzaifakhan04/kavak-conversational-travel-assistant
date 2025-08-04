@@ -1,10 +1,7 @@
 import os
 import json
 import logging
-from typing import (
-    List,
-    Optional
-)
+from typing import List
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from src.client_qdrant import (

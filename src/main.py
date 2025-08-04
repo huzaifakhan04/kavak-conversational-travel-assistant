@@ -46,7 +46,7 @@ nest_asyncio.apply()
 #   Initialize FastAPI application.
 
 app_kwargs={"title": "KAVAK"}
-if os.getenv("ENVIRONMENT") != "dev":
+if os.getenv("ENVIRONMENT")!="dev":
     app_kwargs["docs_url"]=None
     app_kwargs["redoc_url"]=None
     app_kwargs["openapi_url"]=None
