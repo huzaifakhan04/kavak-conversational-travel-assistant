@@ -356,15 +356,45 @@ async def rerank_documents(state: GraphState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error in rerank_documents: {e}", exc_info=True)
         return {"reranked_docs": []}
+    
+#   Generate the final answer based on the reranked documents and query.
 
 async def generate_answer(state: GraphState) -> Dict[str, Any]:
-    
-    '''
+    logger.info("Starting answer generation")
+    try:
+        query=state["query"]
+        reranked_docs=state["reranked_docs"]
+        if not reranked_docs:
+            logger.warning("No documents available for answer generation")
+            return {"answer": "I couldn't find any relevant information to answer your query."}
+        context="\n\n".join([doc.page_content for doc in reranked_docs])
+        system_message=f"""You are a helpful assistant that answers questions based on the provided context.
+        Context:
+        {context}
 
-        TODO: Generate an answer based on the reranked documents and query.
-    
-    '''
-    pass
+        Please answer the following question based on the context above. If the context doesn't contain enough information to answer the question, say so. Be concise and accurate.
+
+        Question: {query}"""
+        llm_instance=await get_gemini_llm()
+        if llm_instance:
+            try:
+                response=await asyncio.to_thread(
+                    lambda: llm_instance.invoke([
+                        SystemMessage(content=system_message),
+                        HumanMessage(content=query)
+                    ])
+                )
+                answer=response.content
+            except Exception as e:
+                logger.error(f"Error calling LLM: {e}")
+                answer=f"Based on the {len(reranked_docs)} relevant documents found, here's what I can tell you about '{query}': [LLM generation failed]"
+        else:
+            answer=f"Based on the {len(reranked_docs)} relevant documents found, here's what I can tell you about '{query}': [LLM not available]"
+        logger.info("Answer generation complete")
+        return {"answer": answer}
+    except Exception as e:
+        logger.error(f"Error in generate_answer: {e}", exc_info=True)
+        return {"answer": "Sorry, I encountered an error while generating the answer."}
 
 workflow=StateGraph(GraphState) #   Building the graph workflow.
 
@@ -388,27 +418,69 @@ app=workflow.compile()  #   Compiling the workflow.
 #   Loading filter options from the extracted data.
 
 def get_filter_options():
+    return {
+        "airline": [
+            "Aeromexico", "Air Canada", "Air France", "Alitalia", "All Nippon Airways",
+            "American Airlines", "British Airways", "Cathay Pacific", "China Eastern",
+            "Delta Air Lines", "Emirates", "Etihad Airways", "Finnair", "Iberia",
+            "Japan Airlines", "JetBlue Airways", "KLM", "Korean Air", "Lufthansa",
+            "Norwegian Air", "Qantas", "Qatar Airways", "Ryanair", "Singapore Airlines",
+            "Southwest Airlines", "Spirit Airlines", "Swiss International", "Thai Airways",
+            "Turkish Airlines", "United Airlines", "Vietnam Airlines", "Virgin Atlantic"
+        ],
+        "alliance": ["Non-Alliance", "OneWorld", "SkyTeam", "Star Alliance"],
+        "from_country": [
+            "Australia", "Canada", "Egypt", "France", "Germany", "Hong Kong", "India",
+            "Italy", "Japan", "Netherlands", "Qatar", "Singapore", "South Korea",
+            "Spain", "Thailand", "Turkey", "UAE", "UK", "USA"
+        ],
+        "to_country": [
+            "Australia", "Canada", "Egypt", "France", "Germany", "Hong Kong", "India",
+            "Italy", "Japan", "Netherlands", "Qatar", "Singapore", "South Korea",
+            "Spain", "Thailand", "Turkey", "UAE", "UK", "USA"
+        ],
+        "travel_class": ["business", "economy", "first", "premium_economy"],
+        "refundable": [False, True],
+        "baggage_included": [False, True],
+        "wifi_available": [False, True],
+        "meal_service": ["meal", "none", "premium_meal", "snack"],
+        "aircraft_type": [
+            "Airbus A320", "Airbus A330", "Airbus A350", "Airbus A380",
+            "Boeing 737", "Boeing 777", "Boeing 787"
+        ],
+        "price_ranges": {
+            "min": 300,
+            "max": 12430,
+            "suggested_ranges": [
+                {"min": 0, "max": 500, "label": "Budget (0-500 USD)"},
+                {"min": 500, "max": 1000, "label": "Economy (500-1000 USD)"},
+                {"min": 1000, "max": 2000, "label": "Mid-range (1000-2000 USD)"},
+                {"min": 2000, "max": 5000, "label": "Premium (2000-5000 USD)"},
+                {"min": 5000, "max": 12430, "label": "Luxury (5000+ USD)"}
+            ]
+        }
+    }
 
-    '''
-    
-        TODO: Get available filter options for dynamic filter generation.
-    
-    '''
 
-    pass
-
-
-#   Example usage of the workflow.
+#   Run the complete search and answer generation workflow with dynamic filter generation.
 
 async def run_search_and_answer(
     query: str,
     collection_name: str
 ) -> Dict[str, Any]:
+    initial_state={
+        "query": query,
+        "collection_name": collection_name,
+        "filters": {},
+        "filter_options": get_filter_options(),
+        "filtered_docs": [],
+        "reranked_docs": [],
+        "answer": ""
+    }
     
-    '''
-    
-        TODO: Run the complete search and answer generation workflow with dynamic filter generation.
-    
-    '''
-
-    pass 
+    try:
+        result=await app.ainvoke(initial_state)
+        return result
+    except Exception as e:
+        logger.error(f"Error in run_search_and_answer: {e}", exc_info=True)
+        return {"error": str(e)}
