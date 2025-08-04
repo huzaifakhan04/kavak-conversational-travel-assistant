@@ -128,6 +128,58 @@ async def process_markdown_file(file_path: str) -> List[Document]:
         logger.error(f"Error processing markdown file {file_path}: {str(e)}")
         raise
 
+#   Function to process a text file by reading its content and chunking it.
+
+async def process_text_file(file_path: str) -> List[Document]:
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            content=file.read()
+        chunks=text_splitter.split_text(content)
+        documents=[]
+        for i, chunk in enumerate(chunks):
+            metadata={
+                "source": file_path,
+                "document_type": "text",
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "filename": os.path.basename(file_path),
+                "flight_id": "",
+                "airline": "",
+                "alliance": "",
+                "from": "",
+                "from_airport": "",
+                "from_country": "",
+                "to": "",
+                "to_airport": "",
+                "to_country": "",
+                "departure_date": "",
+                "return_date": "",
+                "travel_class": "",
+                "layovers": [],
+                "layover_duration_hours": 0,
+                "price_usd": 0,
+                "refundable": False,
+                "cancellation_fee_percent": 0,
+                "baggage_included": False,
+                "wifi_available": False,
+                "meal_service": "",
+                "flight_duration_hours": 0,
+                "aircraft_type": "",
+                "availability": 0,
+                "item_index": i,
+                "total_items": len(chunks)
+            }
+            doc=Document(
+                page_content=chunk,
+                metadata=metadata
+            )
+            documents.append(doc)
+        logger.info(f"Successfully processed text file {file_path} into {len(documents)} chunks")
+        return documents
+    except Exception as e:
+        logger.error(f"Error processing text file {file_path}: {str(e)}")
+        raise
+
 #   Function to ingest data from a file into Qdrant vector store.
 
 async def ingest_data_to_qdrant(
@@ -144,10 +196,14 @@ async def ingest_data_to_qdrant(
             raise ValueError(f"File extension {file_extension} doesn't match declared type {file_type}")
         if file_type==FileType.MARKDOWN and file_extension not in [".md", ".markdown"]:
             raise ValueError(f"File extension {file_extension} doesn't match declared type {file_type}")
+        if file_type==FileType.TEXT and file_extension!=".txt":
+            raise ValueError(f"File extension {file_extension} doesn't match declared type {file_type}")
         if file_type==FileType.JSON:
             documents=await process_json_file(file_path)
         elif file_type==FileType.MARKDOWN:
             documents=await process_markdown_file(file_path)
+        elif file_type==FileType.TEXT:
+            documents=await process_text_file(file_path)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
         if not documents:

@@ -8,6 +8,7 @@ from enum import Enum
 class FileType(str, Enum):
     JSON="json"
     MARKDOWN="markdown"
+    TEXT="text"
 
 class DataIngestionRequest(BaseModel):
 

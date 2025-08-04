@@ -49,17 +49,23 @@ embeddings=None
 llm=None
 client=None
 
+#   Start the event loop in the current thread if none exists.
+
+def start_event_loop_sync():
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
 #   Initialize the embedding model and Qdrant client asynchronously.
 
 async def initialize_components():
-
     global embeddings, client
     if embeddings is None:
+        await asyncio.to_thread(start_event_loop_sync)  #   Ensure event loop is running before initializing embeddings.
         embeddings=await asyncio.to_thread(get_embedding_model, "text-embedding-004")
     if client is None:
         client=await asyncio.to_thread(get_qdrant_client)
-
-    pass
 
 #   Initialize the LLM instance for answer generation.
 
@@ -70,7 +76,7 @@ async def get_gemini_llm():
             google_api_key=os.getenv("GOOGLE_API_KEY")
             if not google_api_key:
                 raise ValueError("GOOGLE_API_KEY not found in environment variables")
-            
+            await asyncio.to_thread(start_event_loop_sync)  #   Ensure event loop is running before initializing LLM.
             llm=await asyncio.to_thread(
                 lambda: ChatGoogleGenerativeAI(
                     model="gemini-2.5-flash",
@@ -96,13 +102,13 @@ class GraphState(TypedDict):
     filters: Dict[str, Any] #   Hard filters to apply.
     filter_options: Dict[str, Any]  #   Available filter options.
     filtered_docs: List[Document]
-    info_docs: List[Document]   #   Documents from simple retrieval.
+    info_docs: List[Document]   #   Documents from hybrid retrieval.
     reranked_docs: List[Document]
     answer: str
 
 #   Classifying the query to determine if it's flight-related, info-related, or both.
 
-async def classify_query(state: GraphState) -> Command[Literal["generate_filters", "simple_retrieval"]]:
+async def classify_query(state: GraphState) -> Command[Literal["generate_filters", "hybrid_retrieval"]]:
     logger.info("Starting query classification")
     try:
         query=state["query"]
@@ -139,7 +145,7 @@ async def classify_query(state: GraphState) -> Command[Literal["generate_filters
                 if query_type in ["flight_only", "both"]:
                     return Command(goto="generate_filters", update={"query_type": query_type})
                 else:
-                    return Command(goto="simple_retrieval", update={"query_type": query_type})
+                    return Command(goto="hybrid_retrieval", update={"query_type": query_type})
             except Exception as e:
                 logger.error(f"Error classifying query with LLM: {e}")
                 return Command(goto="generate_filters", update={"query_type": "both"})
@@ -227,7 +233,7 @@ async def generate_filters(state: GraphState) -> Dict[str, Any]:
 
 #   Apply hard filters to the collection based on metadata and query.
 
-async def apply_hard_filters(state: GraphState) -> Command[Literal["rerank_documents"]]:
+async def apply_hard_filters(state: GraphState) -> Command[Literal["llm_reranker"]]:
     logger.info("Starting hard filter application")
     try:
         await initialize_components()
@@ -384,14 +390,14 @@ async def apply_hard_filters(state: GraphState) -> Command[Literal["rerank_docum
                 logger.info(f"  Doc {i+1}: {doc.page_content[:100]}...")
                 if hasattr(doc, 'metadata') and doc.metadata:
                     logger.info(f"    Metadata: {doc.metadata}")
-        return Command(goto="rerank_documents", update={"filtered_docs": filtered_docs})
+        return Command(goto="llm_reranker", update={"filtered_docs": filtered_docs})
     except Exception as e:
         logger.error(f"Error in apply_hard_filters: {e}", exc_info=True)
-        return Command(goto="rerank_documents", update={"filtered_docs": []})
+        return Command(goto="llm_reranker", update={"filtered_docs": []})
     
 #   Rerank the filtered documents using LLM reranker.
 
-async def rerank_documents(state: GraphState) -> Command[Literal["merge_documents"]]:
+async def llm_reranker(state: GraphState) -> Command[Literal["merge_documents"]]:
     logger.info("Starting document reranking")
     try:
         filtered_docs=state["filtered_docs"]
@@ -440,7 +446,7 @@ async def rerank_documents(state: GraphState) -> Command[Literal["merge_document
         logger.info(f"Reranked flight documents to {len(reranked_docs)} documents")
         return Command(goto="merge_documents", update={"reranked_docs": reranked_docs})
     except Exception as e:
-        logger.error(f"Error in rerank_documents: {e}", exc_info=True)
+        logger.error(f"Error in llm_reranker: {e}", exc_info=True)
         return Command(goto="merge_documents", update={"reranked_docs": []})
     
 #   Generate the final answer based on the reranked documents and query.
@@ -482,15 +488,15 @@ async def generate_answer(state: GraphState) -> Command[Literal[END]]:
         logger.error(f"Error in generate_answer: {e}", exc_info=True)
         return Command(goto=END, update={"answer": "Sorry, I encountered an error while generating the answer."})
     
-#   Perform simple retrieval for info-only queries without hard filters.
+#   Perform hybrid retrieval for info-only queries without hard filters.
     
-async def simple_retrieval(state: GraphState) -> Command[Literal["merge_documents"]]:
-    logger.info("Starting simple retrieval for info queries")
+async def hybrid_retrieval(state: GraphState) -> Command[Literal["merge_documents"]]:
+    logger.info("Starting hybrid retrieval for info queries")
     try:
         await initialize_components()
         collection_name=state["collection_name"]
         query=state["query"]
-        logger.info(f"Performing simple retrieval for query: '{query}'")
+        logger.info(f"Performing hybrid retrieval for query: '{query}'")
         original_store=await asyncio.to_thread(
             lambda: QdrantVectorStore(
                 client=client,
@@ -501,10 +507,10 @@ async def simple_retrieval(state: GraphState) -> Command[Literal["merge_document
         )
         retriever=original_store.as_retriever(search_kwargs={"k": 10})
         info_docs=await retriever.ainvoke(query)
-        logger.info(f"Retrieved {len(info_docs)} documents from simple retrieval")
+        logger.info(f"Retrieved {len(info_docs)} documents from hybrid retrieval")
         return Command(goto="merge_documents", update={"info_docs": info_docs})
     except Exception as e:
-        logger.error(f"Error in simple_retrieval: {e}", exc_info=True)
+        logger.error(f"Error in hybrid_retrieval: {e}", exc_info=True)
         return Command(goto="merge_documents", update={"info_docs": []})
 
 #   Merge documents from both flight and info retrieval paths, reranking if needed.
@@ -568,9 +574,9 @@ workflow=StateGraph(GraphState) #   Building the graph workflow.
 workflow.add_node("classify_query", classify_query)
 workflow.add_node("generate_filters", generate_filters)
 workflow.add_node("apply_hard_filters", apply_hard_filters)
-workflow.add_node("rerank_documents", rerank_documents)
+workflow.add_node("llm_reranker", llm_reranker)
 workflow.add_node("generate_answer", generate_answer)
-workflow.add_node("simple_retrieval", simple_retrieval)
+workflow.add_node("hybrid_retrieval", hybrid_retrieval)
 workflow.add_node("merge_documents", merge_documents)
 
 #   Defining the workflow structure.
@@ -650,3 +656,10 @@ async def run_search_and_answer(
     except Exception as e:
         logger.error(f"Error in run_search_and_answer: {e}", exc_info=True)
         return {"error": str(e)}
+    
+#   Generating a PNG representation of the graph.
+    
+png_data=app.get_graph().draw_mermaid_png()
+output_path="graph.png"
+with open(output_path, "wb") as f:
+    f.write(png_data)
