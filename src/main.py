@@ -12,12 +12,15 @@ from src.models import (
     DataIngestionRequest,
     DataIngestionResponse,
     CreateCollectionRequest,
-    CreateCollectionResponse
+    CreateCollectionResponse,
+    SearchRequest,
+    SearchResponse
 )
 from src.ingestion import (
     ingest_data_to_qdrant,
     create_collection
 )
+from src.graph import run_search_and_answer
 
 #   Creating a directory for logs if it doesn't exist.
 
@@ -30,7 +33,7 @@ if not os.path.exists(log_directory):
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    format="%(asctime)s-%(levelname)s-%(name)s-%(message)s",
     handlers=[logging.StreamHandler(), logging.FileHandler(os.path.join(log_directory, "app.log"))],
 )
 
@@ -59,7 +62,7 @@ app.add_middleware(
 
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the KAVAK Conversational Travel Assistant Platform!"}
+    return {"message": "Welcome to the KAVAK's Conversational Travel Assistant Platform!"}
 
 #   Endpoint to ingest data into Qdrant.
 
@@ -156,6 +159,86 @@ async def create_new_collection(request: CreateCollectionRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error during collection creation: {str(e)}"
+        )
+    
+'''
+
+    Search using LangGraph agent with hybrid RAG capabilities.
+    
+    This endpoint uses the sophisticated LangGraph workflow that includes:
+
+-  Query classification (flight/info/both)
+-  Dynamic filter generation
+-  Hard filtering with metadata
+-  LLM reranking
+-  Hybrid retrieval
+-  Answer generation
+
+'''
+    
+@app.post("/search", response_model=SearchResponse)
+async def search_with_langgraph(request: SearchRequest):
+    """
+    Search using LangGraph agent with hybrid RAG capabilities.
+    
+    This endpoint uses the sophisticated LangGraph workflow that includes:
+-Query classification (flight/info/both)
+-Dynamic filter generation
+-Hard filtering with metadata
+-LLM reranking
+-Hybrid retrieval
+-Answer generation
+    
+    Args:
+        request: Search request with query and collection name
+        
+    Returns:
+        Search response with generated answer and processing details
+    """
+    try:
+        logger.info(f"Starting LangGraph search for query: '{request.query}' in collection: {request.collection_name}")
+        
+        start_time=time.time()
+        
+        #   Running the LangGraph search workflow.
+
+        result=await run_search_and_answer(
+            query=request.query,
+            collection_name=request.collection_name
+        )
+        
+        processing_time=time.time()-start_time
+        if result.get("success", False):
+            logger.info(f"Successfully completed search in {processing_time:.2f}s")
+            return SearchResponse(
+                success=True,
+                message="Search completed successfully",
+                answer=result.get("answer", "No answer generated"),
+                query_type=result.get("query_type", "unknown"),
+                filters_applied=result.get("filters", {}),
+                documents_used=result.get("documents_used", 0),
+                processing_time=processing_time
+            )
+        else:
+            error_msg=result.get('error', 'Unknown error')
+            logger.error(f"Search failed: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Search operation failed: {error_msg}"
+            )
+    except ValueError as e:
+        logger.error(f"Validation error during search: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during search: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error during search: {str(e)}"
         )
 
 if __name__=="__main__":

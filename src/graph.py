@@ -458,7 +458,7 @@ async def generate_answer(state: GraphState) -> Command[Literal[END]]:
         reranked_docs=state["reranked_docs"]
         if not reranked_docs:
             logger.warning("No documents available for answer generation")
-            return {"answer": "I couldn't find any relevant information to answer your query."}
+            return Command(goto=END, update={"answer": "I couldn't find any relevant information to answer your query."})
         context="\n\n".join([doc.page_content for doc in reranked_docs])
         system_message=f"""You are a helpful assistant that answers questions based on the provided context.
         Context:
@@ -652,10 +652,20 @@ async def run_search_and_answer(
     
     try:
         result=await app.ainvoke(initial_state)
-        return result
+        if "error" in result:
+            return {"success": False, "error": result["error"]}
+        return {
+            "success": True,
+            "answer": result.get("answer", "No answer generated"),
+            "query_type": result.get("query_type", "unknown"),
+            "filters": result.get("filters", {}),
+            "documents_used": len(result.get("reranked_docs", [])),
+            "reranked_docs": result.get("reranked_docs", [])
+        }   #   Formatting the result for the response.
+    
     except Exception as e:
         logger.error(f"Error in run_search_and_answer: {e}", exc_info=True)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
     
 #   Generating a PNG representation of the graph – uncomment to use.
     

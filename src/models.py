@@ -53,3 +53,29 @@ class CreateCollectionResponse(BaseModel):
     collection_name: str
     vector_size: int
     embedding_model: str
+
+class SearchRequest(BaseModel):
+
+    query: str
+    collection_name: str
+    
+    @validator("query")
+    def validate_query(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Query cannot be empty")
+        return v.strip()
+    
+    @validator("collection_name")
+    def validate_collection_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Collection name cannot be empty")
+        return v.strip()
+
+class SearchResponse(BaseModel):
+    success: bool
+    message: str
+    answer: str
+    query_type: str
+    filters_applied: Optional[dict]=None
+    documents_used: int
+    processing_time: float
